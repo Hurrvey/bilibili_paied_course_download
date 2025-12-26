@@ -1,0 +1,7 @@
+config.json
+downloads/
+*.pyc
+__pycache__/
+*.log
+.vscode/
+venv/
