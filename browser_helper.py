@@ -7,9 +7,155 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 import json
 import time
+import os
+import subprocess
+import re
+import platform
+
+
+def get_chrome_version():
+    """获取本地Chrome浏览器版本"""
+    try:
+        if platform.system() == "Windows":
+            # Windows下常见的Chrome安装路径
+            possible_paths = [
+                os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            ]
+            
+            chrome_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    chrome_path = path
+                    break
+            
+            if chrome_path:
+                # 通过注册表或文件版本获取版本号
+                import winreg
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Google\Chrome\BLBeacon")
+                    version, _ = winreg.QueryValueEx(key, "version")
+                    winreg.CloseKey(key)
+                    return version
+                except:
+                    pass
+                
+                # 备用方法：通过wmic获取版本
+                try:
+                    output = subprocess.check_output(
+                        f'wmic datafile where name="{chrome_path.replace(chr(92), chr(92)+chr(92))}" get Version /value',
+                        shell=True, stderr=subprocess.DEVNULL
+                    ).decode('utf-8', errors='ignore')
+                    match = re.search(r'Version=(\d+\.\d+\.\d+\.\d+)', output)
+                    if match:
+                        return match.group(1)
+                except:
+                    pass
+        else:
+            # Linux/Mac
+            try:
+                output = subprocess.check_output(['google-chrome', '--version'], stderr=subprocess.DEVNULL).decode()
+                match = re.search(r'(\d+\.\d+\.\d+\.\d+)', output)
+                if match:
+                    return match.group(1)
+            except:
+                pass
+    except Exception as e:
+        print(f"获取Chrome版本失败: {e}")
+    return None
+
+
+def download_chromedriver_from_mirror(version):
+    """从国内镜像下载ChromeDriver"""
+    import urllib.request
+    import zipfile
+    import io
+    
+    major_version = version.split('.')[0]
+    
+    # 国内镜像源
+    mirrors = [
+        f"https://registry.npmmirror.com/-/binary/chromedriver/{version}/chromedriver_win32.zip",
+        f"https://registry.npmmirror.com/-/binary/chrome-for-testing/{version}/win32/chromedriver-win32.zip",
+        f"https://cdn.npmmirror.com/binaries/chromedriver/{version}/chromedriver_win32.zip",
+    ]
+    
+    # 对于新版Chrome (115+)，使用新的下载路径
+    if int(major_version) >= 115:
+        mirrors = [
+            f"https://registry.npmmirror.com/-/binary/chrome-for-testing/{version}/win32/chromedriver-win32.zip",
+            f"https://registry.npmmirror.com/-/binary/chrome-for-testing/{version}/win64/chromedriver-win64.zip",
+        ]
+    
+    driver_dir = os.path.join(os.path.dirname(__file__), "drivers")
+    os.makedirs(driver_dir, exist_ok=True)
+    driver_path = os.path.join(driver_dir, "chromedriver.exe")
+    
+    if os.path.exists(driver_path):
+        print(f"使用已缓存的ChromeDriver: {driver_path}")
+        return driver_path
+    
+    for mirror_url in mirrors:
+        try:
+            print(f"正在从镜像下载ChromeDriver: {mirror_url}")
+            req = urllib.request.Request(mirror_url, headers={'User-Agent': 'Mozilla/5.0'})
+            response = urllib.request.urlopen(req, timeout=30)
+            zip_data = response.read()
+            
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                for name in zf.namelist():
+                    if name.endswith('chromedriver.exe'):
+                        with zf.open(name) as src:
+                            with open(driver_path, 'wb') as dst:
+                                dst.write(src.read())
+                        print(f"ChromeDriver已下载到: {driver_path}")
+                        return driver_path
+        except Exception as e:
+            print(f"镜像 {mirror_url} 下载失败: {e}")
+            continue
+    
+    return None
+
+
+def get_chromedriver_path():
+    """获取ChromeDriver路径，支持多种方式"""
+    
+    # 方式1：检查本地drivers目录
+    local_driver = os.path.join(os.path.dirname(__file__), "drivers", "chromedriver.exe")
+    if os.path.exists(local_driver):
+        print(f"使用本地ChromeDriver: {local_driver}")
+        return local_driver
+    
+    # 方式2：检查环境变量中的chromedriver
+    try:
+        result = subprocess.run(['where', 'chromedriver'], capture_output=True, text=True)
+        if result.returncode == 0:
+            path = result.stdout.strip().split('\n')[0]
+            print(f"使用环境变量中的ChromeDriver: {path}")
+            return path
+    except:
+        pass
+    
+    # 方式3：尝试从国内镜像下载
+    chrome_version = get_chrome_version()
+    if chrome_version:
+        print(f"检测到Chrome版本: {chrome_version}")
+        driver_path = download_chromedriver_from_mirror(chrome_version)
+        if driver_path:
+            return driver_path
+    
+    # 方式4：尝试使用webdriver-manager（可能因网络问题失败）
+    try:
+        from webdriver_manager.chrome import ChromeDriverManager
+        print("尝试使用webdriver-manager下载...")
+        return ChromeDriverManager().install()
+    except Exception as e:
+        print(f"webdriver-manager下载失败: {e}")
+    
+    return None
 
 
 class BilibiliHelper:
@@ -30,15 +176,29 @@ class BilibiliHelper:
         chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
         
         try:
-            # 使用webdriver-manager自动管理ChromeDriver
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            # 获取ChromeDriver路径
+            driver_path = get_chromedriver_path()
+            
+            if driver_path:
+                service = Service(driver_path)
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            else:
+                # 最后尝试让Selenium自动查找
+                print("尝试让Selenium自动查找ChromeDriver...")
+                self.driver = webdriver.Chrome(options=chrome_options)
+            
             self.driver.execute_cdp_cmd('Network.enable', {})
             print("浏览器启动成功！")
         except Exception as e:
             print(f"启动浏览器失败: {e}")
-            print("\n请确保已安装Chrome浏览器")
-            print("如果仍有问题，请尝试：pip install --upgrade webdriver-manager")
+            print("\n" + "="*60)
+            print("解决方案：")
+            print("1. 确保已安装Chrome浏览器")
+            print("2. 手动下载ChromeDriver:")
+            print("   - 访问 https://googlechromelabs.github.io/chrome-for-testing/")
+            print("   - 下载与你Chrome版本匹配的chromedriver")
+            print("   - 解压后将chromedriver.exe放到本项目的 drivers 文件夹中")
+            print("="*60)
             raise
     
     def open_course_page(self):
