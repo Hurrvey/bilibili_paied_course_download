@@ -7,6 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 import json
 import time
 
@@ -29,14 +30,15 @@ class BilibiliHelper:
         chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
         
         try:
-            # 尝试启动Chrome
-            self.driver = webdriver.Chrome(options=chrome_options)
+            # 使用webdriver-manager自动管理ChromeDriver
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
             self.driver.execute_cdp_cmd('Network.enable', {})
             print("浏览器启动成功！")
         except Exception as e:
             print(f"启动浏览器失败: {e}")
-            print("\n请确保已安装Chrome浏览器和ChromeDriver")
-            print("安装方法：pip install selenium webdriver-manager")
+            print("\n请确保已安装Chrome浏览器")
+            print("如果仍有问题，请尝试：pip install --upgrade webdriver-manager")
             raise
     
     def open_course_page(self):
